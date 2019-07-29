@@ -9,6 +9,7 @@ extern crate serde;
 extern crate percent_encoding;
 extern crate hyper;
 extern crate futures;
+extern crate hotwatch;
 
 mod sources;
 mod common;
@@ -24,6 +25,7 @@ use std::time::{Duration, Instant};
 use common::*;
 use futures::future::*;
 use lazy_static::initialize;
+use hotwatch::*;
 
 fn antique() -> Option<Instant> {
     None
@@ -115,6 +117,42 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
 
 fn main() {
     initialize(&PROFILES);
+
+    let mut hotwatch = Hotwatch::new().expect("hotwatch failed to initialize");
+    hotwatch.watch("./", |event: Event| {
+        match event {
+            Event::Write(path) | Event::Create(path) => {
+                if path.file_name().unwrap().to_string_lossy() != "profiles.json" {
+                    return;
+                }
+
+                let profiles = PROFILES.write();
+                if profiles.is_err() {
+                    println!("Error while locking PROFILES for writing. Aborting rehash.");
+                    return;
+                }
+
+                let file = File::open(path);
+                if file.is_err() {
+                    println!("Error while opening profiles.json for reading. Aborting rehash.");
+                    return;
+                }
+                let file = file.unwrap();
+
+                let new_profiles = from_reader::<_, _>(file);
+                if new_profiles.is_err() {
+                    println!("Error while reading profiles.json. Aborting rehash.");
+                    return;
+                }
+                let new_profiles = new_profiles.unwrap();
+
+                let mut profiles = profiles.unwrap();
+                *profiles = new_profiles;
+                println!("profiles successfully reloaded");
+            },
+            _ => {}
+        }
+    }).expect("failed to watch profiles");
 
     let addr = ([127, 0, 0, 1], 3020).into();
 
