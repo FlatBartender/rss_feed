@@ -14,6 +14,7 @@ impl FeedGenerator for DummyFeedGenerator {
     fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
 
+        trace!("DummyFeedGenerator used");
         let item = rss::ItemBuilder::default()
             .title("dummy".to_string())
             .link("dummy.link".to_string())

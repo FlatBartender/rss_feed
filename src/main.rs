@@ -10,6 +10,9 @@ extern crate percent_encoding;
 extern crate hyper;
 extern crate futures;
 extern crate hotwatch;
+#[macro_use]
+extern crate log;
+extern crate pretty_env_logger;
 
 mod sources;
 mod common;
@@ -61,6 +64,7 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
     let (items, renew) = {
         let profiles = PROFILES.read();
         if let Err(error) = profiles {
+            error!("error locking profiles for read: {:?}", error);
             return response.status(500).body(Body::from(format!("{:#?}", error))).unwrap()
         }
         let profiles = profiles.unwrap();
@@ -68,6 +72,7 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let profile = profiles.get(&path);
 
         if profile.is_none() {
+            trace!("Profile {} not found", path);
             return response.status(404).body(Body::empty()).unwrap()
         }
         let profile = profile.unwrap();
@@ -77,8 +82,10 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
             renew = true;
             let results: RssResult<Vec<Vec<rss::Item>>> = join_all(profile.sources.iter()
                 .map(|s| s.get_items()))
+                .inspect(|fut| trace!("{:?}", fut))
                 .wait();
             if let Err(error) = results {
+                error!("error getting results from sources for profile {}: {:?}", path, error);
                 return response.status(500).body(format!("{:#?}", error).into()).unwrap()
             }
             let results = results.unwrap();
@@ -95,6 +102,7 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
     if renew {
         let profiles = PROFILES.write();
         if let Err(error) = profiles {
+            error!("error locking profile for writing {}: {:?}", path, error);
             return response.status(500).body(Body::from(format!("{:#?}", error))).unwrap()
         }
         let mut profiles = profiles.unwrap();
@@ -110,16 +118,23 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         .build()
         .unwrap();
 
+    trace!("RSS served successfully");
+
     response.status(200)
         .body(Body::from(channel.to_string()))
         .unwrap()
 }
 
 fn main() {
+    pretty_env_logger::init();
+
+    trace!("Initializing profiles...");
     initialize(&PROFILES);
 
+    trace!("Watching file...");
     let mut hotwatch = Hotwatch::new().expect("hotwatch failed to initialize");
     hotwatch.watch("./", |event: Event| {
+        trace!("Hotwatch event: {:?}", event);
         match event {
             Event::Write(path) | Event::Create(path) => {
                 if path.file_name().unwrap().to_string_lossy() != "profiles.json" {
@@ -128,27 +143,27 @@ fn main() {
 
                 let profiles = PROFILES.write();
                 if profiles.is_err() {
-                    println!("Error while locking PROFILES for writing. Aborting rehash.");
+                    error!("Error while locking PROFILES for writing. Aborting rehash.");
                     return;
                 }
 
                 let file = File::open(path);
                 if file.is_err() {
-                    println!("Error while opening profiles.json for reading. Aborting rehash.");
+                    error!("Error while opening profiles.json for reading. Aborting rehash.");
                     return;
                 }
                 let file = file.unwrap();
 
                 let new_profiles = from_reader::<_, _>(file);
                 if new_profiles.is_err() {
-                    println!("Error while reading profiles.json. Aborting rehash.");
+                    error!("Error while reading profiles.json. Aborting rehash.");
                     return;
                 }
                 let new_profiles = new_profiles.unwrap();
 
                 let mut profiles = profiles.unwrap();
                 *profiles = new_profiles;
-                println!("profiles successfully reloaded");
+                info!("profiles successfully reloaded");
             },
             _ => {}
         }
@@ -160,6 +175,8 @@ fn main() {
         .serve(|| service_fn_ok(serve_rss));
 
     hyper::rt::run(server.map_err(|e| {
-        eprintln!("server error: {}", e);
+        error!("server error: {}", e);
     }));
+
+    info!("Everything has started successfully.");
 }

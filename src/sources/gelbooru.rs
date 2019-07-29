@@ -84,14 +84,21 @@ impl FeedGenerator for GelbooruFeedGenerator {
     fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
         
+        trace!("GelbooruFeedGenerator used");
+        
         let tags = &self.taglist.join(" ");
         let tags = utf8_percent_encode(tags, NON_ALPHANUMERIC);
     
+        trace!("Made taglist: {}", tags);
         Box::new(CLIENT.get(&format!("https://gelbooru.com/index.php?json=1&page=dapi&s=post&q=index&tags={tags}&user_id={uid}&api_key={key}&limit={limit}", tags = tags, uid = self.user_id, key = self.api_key, limit = self.limit))
             .send()
+            .inspect(|fut| trace!("{:?}", fut))
             .and_then(|mut res| res.json::<Vec<GelbooruItem>>())
+            .inspect(|fut| trace!("{:?}", fut))
             .map_err(ReqwestError)
+            .inspect(|fut| trace!("{:?}", fut))
             .and_then(gelbooru_to_items)
+            .inspect(|fut| trace!("{:?}", fut))
         )
     }
 }
