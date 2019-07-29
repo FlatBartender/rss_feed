@@ -80,21 +80,17 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let mut renew = false;
         let items = if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > Duration::from_secs(600) {
             renew = true;
-            let results: RssResult<Vec<Vec<rss::Item>>> = profile.sources.iter()
-                .map(|s| s.get_items())
-                .collect();
+            join_all(profile.sources.iter()
+                .map(|s| s.get_items()))
+                .inspect(|fut| trace!("{:?}", fut))
+                .and_then(|results: Vec<Vec<RssItem>>| {
+                    results.into_iter()
+                        .flat_map(|v| v.into_iter())
+                        .collect()
 
-            trace!("Waited on future, got result: {:?}", results);
-            if let Err(error) = results {
-                error!("error getting results from sources for profile {}: {:?}", path, error);
-                return response.status(500).body(format!("{:#?}", error).into()).unwrap()
-            }
-            let results = results.unwrap();
-            results.into_iter()
-                .flat_map(|v| v.into_iter())
-                .collect()
+            })
         } else {
-            profile.cache.clone()
+            ok(profile.cache.clone())
         };
 
         (items, renew)

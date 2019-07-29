@@ -11,7 +11,7 @@ pub struct DummyFeedGenerator {
 }
 
 impl FeedGenerator for DummyFeedGenerator {
-    fn get_items(&self) -> RssResult<Vec<rss::Item>> {
+    fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
 
         trace!("DummyFeedGenerator used");
@@ -20,10 +20,10 @@ impl FeedGenerator for DummyFeedGenerator {
             .link("dummy.link".to_string())
             .description("dummy description".to_string())
             .build()
-            .map_err(StringError)?;
+            .map_err(StringError).unwrap();
 
         let res: Vec<rss::Item> = std::iter::repeat(item).take(self.limit).collect();
 
-        Ok(res)
+        Box::new(futures::future::result(Ok(res)))
     }
 }
