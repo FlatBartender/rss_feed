@@ -84,6 +84,7 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
                 .map(|s| s.get_items()))
                 .inspect(|fut| trace!("{:?}", fut))
                 .wait();
+            trace!("Waited on future, got result: {:?}", results);
             if let Err(error) = results {
                 error!("error getting results from sources for profile {}: {:?}", path, error);
                 return response.status(500).body(format!("{:#?}", error).into()).unwrap()
