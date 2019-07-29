@@ -22,7 +22,8 @@ use rss::*;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use common::*;
-use hyper::rt::Future;
+use futures::future::*;
+use lazy_static::initialize;
 
 fn default_cache_ts() -> Instant {
     Instant::now() - Duration::from_secs(600)
@@ -66,9 +67,9 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let mut renew = false;
         let items = if profile.cache_ts.elapsed() > Duration::from_secs(600) {
             renew = true;
-            let results: RssResult<Vec<Vec<rss::Item>>> = profile.sources.iter()
-                .map(|s| s.get_items(10))
-                .collect();
+            let results: RssResult<Vec<Vec<rss::Item>>> = join_all(profile.sources.iter()
+                .map(|s| s.get_items(10)))
+                .wait();
             if let Err(error) = results {
                 return response.status(500).body(format!("{:#?}", error).into()).unwrap()
             }
@@ -107,6 +108,8 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
 }
 
 fn main() {
+    initialize(&PROFILES);
+
     let addr = ([127, 0, 0, 1], 3020).into();
 
     let server = Server::bind(&addr)

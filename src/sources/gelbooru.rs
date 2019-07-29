@@ -49,15 +49,13 @@ pub struct GelbooruItem {
     pub created_at: String,
 }
 
-pub fn gelbooru_to_rss(g_item: GelbooruItem) -> impl Future<Item = rss::Item, Error = String> {
+pub fn gelbooru_to_rss(g_item: GelbooruItem) -> RssResult<rss::Item> {
+    use RssError::*;
+
     let enclosure = rss::EnclosureBuilder::default()
         .url(g_item.file_url.clone())
-        .build();
-
-    if let Err(error) = enclosure {
-        return err(error);
-    }
-    let enclosure = enclosure.unwrap();
+        .build()
+        .map_err(StringError)?;
 
     let item = rss::ItemBuilder::default()
         .title(format!("{tags}", tags = g_item.tags))
@@ -65,31 +63,28 @@ pub fn gelbooru_to_rss(g_item: GelbooruItem) -> impl Future<Item = rss::Item, Er
         .description(g_item.tags)
         .enclosure(enclosure)
         .pub_date(DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(g_item.change, 0), Utc).to_rfc2822())
-        .build();
+        .build()
+        .map_err(StringError)?;
 
-    if let Err(error) = item {
-        return err(error);
-    }
-    let item = item.unwrap();
+    Ok(item)
+}
 
-    ok(item)
+fn gelbooru_to_items(vec: Vec<GelbooruItem>) -> impl Future<Item = Vec<rss::Item>, Error = RssError> {
+    result(vec.into_iter().map(gelbooru_to_rss).collect())
 }
 
 impl FeedGenerator for GelbooruFeedGenerator {
-    fn get_items(&self, number: u32) -> RssResult<Vec<rss::Item>> {
+    fn get_items(&self, number: u32) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
         
         let tags = &self.taglist.join(" ");
         let tags = utf8_percent_encode(tags, NON_ALPHANUMERIC);
-
+    
         Box::new(CLIENT.get(&format!("https://gelbooru.com/index.php?json=1&page=dapi&s=post&q=index&tags={tags}&user_id={uid}&api_key={key}&limit={limit}", tags = tags, uid = self.user_id, key = self.api_key, limit = number))
             .send()
-            .and_then(|body| {
-                body.json::<Vec<GelbooruItem>>()
-            })
+            .and_then(|mut res| res.json::<Vec<GelbooruItem>>())
             .map_err(ReqwestError)
-            .map(|vec| vec.into_iter().map(gelbooru_to_rss))
-            .map(join_all)
+            .and_then(gelbooru_to_items)
         )
     }
 }
