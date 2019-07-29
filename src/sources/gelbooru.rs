@@ -1,7 +1,7 @@
 use crate::common::*;
 use chrono::prelude::*;
 use percent_encoding::*;
-use reqwest::r#async::Client;
+use reqwest::Client;
 use futures::future::*;
 
 lazy_static! {
@@ -81,7 +81,7 @@ fn gelbooru_to_items(vec: Vec<GelbooruItem>) -> impl Future<Item = Vec<rss::Item
 }
 
 impl FeedGenerator for GelbooruFeedGenerator {
-    fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
+    fn get_items(&self) -> RssResult<Vec<rss::Item>> {
         use RssError::*;
         
         trace!("GelbooruFeedGenerator used");
@@ -94,16 +94,14 @@ impl FeedGenerator for GelbooruFeedGenerator {
 
         trace!("URL: {}", url);
 
-        Box::new(CLIENT.get(&url)
+        CLIENT.get(&url)
             .send()
-            .inspect(|fut| trace!("{:?}", fut))
-            .and_then(|mut res| res.json::<Vec<GelbooruItem>>())
-            .inspect(|fut| trace!("{:?}", fut))
-            .map_err(ReqwestError)
-            .inspect(|fut| trace!("{:?}", fut))
-            .and_then(gelbooru_to_items)
-            .inspect(|fut| trace!("{:?}", fut))
-        )
+            .map_err(ReqwestError)?
+            .json::<Vec<GelbooruItem>>()
+            .map_err(ReqwestError)?
+            .into_iter()
+            .map(gelbooru_to_rss)
+            .collect()
     }
 }
 

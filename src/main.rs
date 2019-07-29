@@ -80,13 +80,10 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let mut renew = false;
         let items = if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > Duration::from_secs(600) {
             renew = true;
-            let task = join_all(profile.sources.iter()
-                .map(|s| s.get_items()))
-                .inspect(|fut| trace!("{:?}", fut));
-            
-            let mut task = futures::executor::spawn(task);
+            let results: RssResult<Vec<Vec<rss::Item>>> = profile.sources.iter()
+                .map(|s| s.get_items())
+                .collect();
 
-            let results: RssResult<Vec<Vec<rss::Item>>> = task.wait_future();
             trace!("Waited on future, got result: {:?}", results);
             if let Err(error) = results {
                 error!("error getting results from sources for profile {}: {:?}", path, error);
