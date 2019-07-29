@@ -56,70 +56,36 @@ lazy_static! {
     };
 }
 
-fn serve_rss(req: Request<Body>) -> Response<Body> {
+fn serve_rss(req: Request<Body>) -> impl Future<Item = Response<Body>, Error = hyper::Error> {
     let mut response = Response::builder();
 
     let path = req.uri().path()[1..].to_string();
 
-    let (items, renew) = {
-        let profiles = PROFILES.read();
-        if let Err(error) = profiles {
-            error!("error locking profiles for read: {:?}", error);
-            return response.status(500).body(Body::from(format!("{:#?}", error))).unwrap()
-        }
-        let profiles = profiles.unwrap();
-
-        let profile = profiles.get(&path);
-
-        if profile.is_none() {
-            trace!("Profile {} not found", path);
-            return response.status(404).body(Body::empty()).unwrap()
-        }
-        let profile = profile.unwrap();
-
-        let mut renew = false;
-        let items = if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > Duration::from_secs(600) {
-            renew = true;
-            join_all(profile.sources.iter()
-                .map(|s| s.get_items()))
-                .inspect(|fut| trace!("{:?}", fut))
-                .and_then(|results: Vec<Vec<RssItem>>| {
-                    results.into_iter()
-                        .flat_map(|v| v.into_iter())
-                        .collect()
-
-            })
+    PROFILES.write().into_future().map_err(|err| (format!("{:?}", err), 500)).and_then(|profiles| {
+        profiles.get_mut(&path).ok_or(("profile not found".to_string(), 404))
+    }).and_then(|profile| {
+        if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > profile.cache_life {
+            Either::A(
+                join_all(profile.sources.iter().map(|s| s.get_items()))
+                .map(|results: Vec<Vec<rss::Item>>| {
+                    results.into_iter().flat_map(|v| v.into_iter()).collect()
+                }).map(|results: Vec<rss::Item>| {
+                    profile.cache = results.clone();
+                    results
+                }).map_err(|err| {
+                    (format!("{:?}", err), 500)
+                })
+            )
         } else {
-            ok(profile.cache.clone())
-        };
-
-        (items, renew)
-    };
-
-    if renew {
-        let profiles = PROFILES.write();
-        if let Err(error) = profiles {
-            error!("error locking profile for writing {}: {:?}", path, error);
-            return response.status(500).body(Body::from(format!("{:#?}", error))).unwrap()
+            Either::B(ok(profile.cache.clone()))
         }
-        let mut profiles = profiles.unwrap();
-
-        let mut profile = profiles.get_mut(&path).unwrap();
-
-        profile.cache = items.clone();
-        profile.cache_ts = Some(Instant::now());
-    }
-
-    let channel = ChannelBuilder::default()
-        .items(items)
-        .build()
-        .unwrap();
-
-    trace!("RSS served successfully");
-
-    response.status(200)
-        .body(Body::from(channel.to_string()))
-        .unwrap()
+    }).and_then(|items| {
+        ChannelBuilder::default().items(items).build().map_err(|err| (err, 500))
+    }).and_then(|channel| {
+        response.status(200).body(Body::from(channel.to_string())).map_err(|err| (format!("{:?}", err), 500))
+    }).or_else(|(err, code)| {
+        response.status(code).body(Body::from(format!("{:#?}", err)))
+    }).map_err(|err| err.into())
 }
 
 fn main() {
@@ -169,11 +135,9 @@ fn main() {
     let addr = ([127, 0, 0, 1], 3020).into();
 
     let server = Server::bind(&addr)
-        .serve(|| service_fn_ok(serve_rss));
+        .serve(|| service_fn(serve_rss));
 
-    hyper::rt::run(server.map_err(|e| {
-        error!("server error: {}", e);
-    }));
+    hyper::rt::run(server);
 
     info!("Everything has started successfully.");
 }

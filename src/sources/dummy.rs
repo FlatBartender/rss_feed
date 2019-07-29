@@ -4,7 +4,7 @@ fn default_limit() -> usize {
     10
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct DummyFeedGenerator {
     #[serde(default = "default_limit")]
     limit: usize,

@@ -6,7 +6,7 @@ pub use dummy::*;
 
 use crate::common::*;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum Source {
     Gelbooru(gelbooru::GelbooruFeedGenerator),

@@ -14,7 +14,7 @@ fn default_limit() -> usize {
     10
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct GelbooruFeedGenerator {
     api_key: String,
     user_id: String,
