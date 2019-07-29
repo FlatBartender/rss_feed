@@ -6,7 +6,7 @@ pub use futures::{
 pub type RssResult<T> = Result<T, RssError>;
 
 pub trait FeedGenerator {
-    fn get_items(&self, number: u32) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>>;
+    fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>>;
 }
 
 #[derive(Debug)]

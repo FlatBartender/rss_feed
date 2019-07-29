@@ -1,10 +1,17 @@
 use crate::common::*;
 
+fn default_limit() -> usize {
+    10
+}
+
 #[derive(Deserialize, Debug)]
-pub struct DummyFeedGenerator;
+pub struct DummyFeedGenerator {
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
 
 impl FeedGenerator for DummyFeedGenerator {
-    fn get_items(&self, number: u32) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
+    fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
 
         let item = rss::ItemBuilder::default()
@@ -14,7 +21,7 @@ impl FeedGenerator for DummyFeedGenerator {
             .build()
             .map_err(StringError).unwrap();
 
-        let res: Vec<rss::Item> = std::iter::repeat(item).take(number as usize).collect();
+        let res: Vec<rss::Item> = std::iter::repeat(item).take(self.limit).collect();
 
         Box::new(futures::future::result(Ok(res)))
     }

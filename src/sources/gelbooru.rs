@@ -10,19 +10,26 @@ lazy_static! {
     };
 }
 
+fn default_limit() -> usize {
+    10
+}
+
 #[derive(Deserialize, Debug)]
 pub struct GelbooruFeedGenerator {
     api_key: String,
     user_id: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
     pub taglist: Vec<String>,
 }
 
 impl GelbooruFeedGenerator {
-    pub fn new(api_key: String, user_id: String, taglist: Vec<String>) -> GelbooruFeedGenerator {
+    pub fn new(api_key: String, user_id: String, taglist: Vec<String>, limit: usize) -> GelbooruFeedGenerator {
         GelbooruFeedGenerator {
             api_key,
             user_id,
             taglist,
+            limit,
         }
     }
 }
@@ -74,13 +81,13 @@ fn gelbooru_to_items(vec: Vec<GelbooruItem>) -> impl Future<Item = Vec<rss::Item
 }
 
 impl FeedGenerator for GelbooruFeedGenerator {
-    fn get_items(&self, number: u32) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
+    fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>> {
         use RssError::*;
         
         let tags = &self.taglist.join(" ");
         let tags = utf8_percent_encode(tags, NON_ALPHANUMERIC);
     
-        Box::new(CLIENT.get(&format!("https://gelbooru.com/index.php?json=1&page=dapi&s=post&q=index&tags={tags}&user_id={uid}&api_key={key}&limit={limit}", tags = tags, uid = self.user_id, key = self.api_key, limit = number))
+        Box::new(CLIENT.get(&format!("https://gelbooru.com/index.php?json=1&page=dapi&s=post&q=index&tags={tags}&user_id={uid}&api_key={key}&limit={limit}", tags = tags, uid = self.user_id, key = self.api_key, limit = self.limit))
             .send()
             .and_then(|mut res| res.json::<Vec<GelbooruItem>>())
             .map_err(ReqwestError)

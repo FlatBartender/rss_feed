@@ -25,17 +25,23 @@ use common::*;
 use futures::future::*;
 use lazy_static::initialize;
 
-fn default_cache_ts() -> Instant {
-    Instant::now() - Duration::from_secs(600)
+fn antique() -> Option<Instant> {
+    None
+}
+
+fn default_cache_life() -> Duration {
+    Duration::from_secs(600)
 }
 
 #[derive(Deserialize, Debug)]
 pub struct Profile {
     pub sources: Vec<sources::Source>,
-    #[serde(skip, default = "default_cache_ts")]
-    pub cache_ts: Instant,
+    #[serde(skip, default = "antique")]
+    pub cache_ts: Option<Instant>,
     #[serde(skip)]
     pub cache: Vec<rss::Item>,
+    #[serde(default = "default_cache_life")]
+    pub cache_life: Duration,
 }
 
 lazy_static! {
@@ -65,10 +71,10 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let profile = profile.unwrap();
 
         let mut renew = false;
-        let items = if profile.cache_ts.elapsed() > Duration::from_secs(600) {
+        let items = if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > Duration::from_secs(600) {
             renew = true;
             let results: RssResult<Vec<Vec<rss::Item>>> = join_all(profile.sources.iter()
-                .map(|s| s.get_items(10)))
+                .map(|s| s.get_items()))
                 .wait();
             if let Err(error) = results {
                 return response.status(500).body(format!("{:#?}", error).into()).unwrap()
@@ -94,7 +100,7 @@ fn serve_rss(req: Request<Body>) -> Response<Body> {
         let mut profile = profiles.get_mut(&path).unwrap();
 
         profile.cache = items.clone();
-        profile.cache_ts = Instant::now();
+        profile.cache_ts = Some(Instant::now());
     }
 
     let channel = ChannelBuilder::default()
