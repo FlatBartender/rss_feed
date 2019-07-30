@@ -56,12 +56,12 @@ lazy_static! {
     };
 }
 
-fn serve_rss(req: Request<Body>) -> impl Future<Item = Response<Body>, Error = hyper::Error> {
+fn serve_rss(req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = hyper::http::Error>> {
     let mut response = Response::builder();
 
     let path = req.uri().path()[1..].to_string();
 
-    PROFILES.write().into_future().map_err(|err| (format!("{:?}", err), 500)).and_then(|profiles| {
+    Box::new(PROFILES.write().into_future().map_err(|err| (format!("{:?}", err), 500)).and_then(|profiles| {
         profiles.get_mut(&path).ok_or(("profile not found".to_string(), 404))
     }).and_then(|profile| {
         if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > profile.cache_life {
@@ -85,7 +85,7 @@ fn serve_rss(req: Request<Body>) -> impl Future<Item = Response<Body>, Error = h
         response.status(200).body(Body::from(channel.to_string())).map_err(|err| (format!("{:?}", err), 500))
     }).or_else(|(err, code)| {
         response.status(code).body(Body::from(format!("{:#?}", err)))
-    }).map_err(|err| err.into())
+    }).from_err())
 }
 
 fn main() {
@@ -135,7 +135,8 @@ fn main() {
     let addr = ([127, 0, 0, 1], 3020).into();
 
     let server = Server::bind(&addr)
-        .serve(|| service_fn(serve_rss));
+        .serve(|| service_fn(serve_rss))
+        .map_err(|err| error!("{}", err));
 
     hyper::rt::run(server);
 
