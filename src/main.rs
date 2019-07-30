@@ -67,6 +67,15 @@ fn actually_update_cache((path, vec): (String, Vec<rss::Item>)) -> String {
     path
 }
 
+fn cache_need_refresh(path: String) -> bool {
+    let (cache_ts, cache_life) = {
+        let profile = PROFILES.read().unwrap().get(&path).unwrap();
+        (profile.cache_ts, profile.cache_life)
+    };
+
+    cache_ts.is_none() || cache_ts.unwrap().elapsed() > cache_life
+}
+
 fn refresh_cache(path: String) -> impl Future<Item = String, Error = (String, u16)> {
     let (cache_ts, cache_life) = {
         let profile = PROFILES.read().unwrap().get(&path).unwrap();
@@ -108,22 +117,35 @@ fn response_error((err, code): (String, u16)) -> impl Future<Item = Response<Bod
     Response::builder().status(code).body(Body::from(format!("{:#?}", err))).into_future()
 }
 
-fn serve_rss(req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = hyper::http::Error> + Send> {
+fn serve_rss(req: Request<Body>) -> impl Future<Item = Response<Body>, Error = hyper::http::Error> {
     let path = req.uri().path()[1..].to_string();
 
     let profile_exists = {
         PROFILES.read().unwrap().contains_key(&path)
     };
     
-    Box::new(match profile_exists {
+    let fut = match profile_exists {
         true => ok(path),
         false => err(("profile not found".to_string(), 404)),
+    };
+
+    if cache_need_refresh(path) {
+        let sources = {
+            PROFILES.read().unwrap().get(&path).unwrap().sources
+        };
+        
+         Either::A(fut.join(join_all(sources.iter().map(sources::Source::get_items))
+            .map_err(|err| (format!("{:?}", err), 500)))
+            .map(vecvec_into_vec)
+            .map(actually_update_cache))
+    } else {
+        Either::B(fut)
     }.and_then(refresh_cache)
     .map(get_cache)
     .and_then(make_channel)
     .and_then(make_response)
     .or_else(response_error)
-    .from_err())
+    .from_err()
 }
 
 fn main() {
