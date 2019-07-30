@@ -2,13 +2,7 @@ use crate::common::*;
 use chrono::prelude::*;
 use percent_encoding::*;
 use reqwest::r#async::Client;
-use futures::future::*;
-
-lazy_static! {
-    static ref CLIENT: Client = {
-        Client::new()
-    };
-}
+use futures::future::result;
 
 fn default_limit() -> usize {
     10
@@ -56,7 +50,7 @@ pub struct GelbooruItem {
     pub created_at: String,
 }
 
-pub fn gelbooru_to_rss(g_item: GelbooruItem) -> RssResult<rss::Item> {
+pub fn gelbooru_to_rss(g_item: GelbooruItem) -> Result<rss::Item, RssError> {
     use RssError::*;
 
     let enclosure = rss::EnclosureBuilder::default()
@@ -85,24 +79,17 @@ impl FeedGenerator for GelbooruFeedGenerator {
         use RssError::*;
         
         trace!("GelbooruFeedGenerator used");
-        
+
         let tags = &self.taglist.join(" ");
         let tags = utf8_percent_encode(tags, NON_ALPHANUMERIC);
     
-        trace!("Made taglist: {}", tags);
         let url = format!("https://gelbooru.com/index.php?json=1&page=dapi&s=post&q=index&tags={tags}&user_id={uid}&api_key={key}&limit={limit}", tags = tags, uid = self.user_id, key = self.api_key, limit = self.limit);
 
-        trace!("URL: {}", url);
-
-        Box::new(CLIENT.get(&url)
+        Box::new(Client::new().get(&url)
             .send()
-            .inspect(|fut| trace!("{:?}", fut))
             .and_then(|mut res| res.json::<Vec<GelbooruItem>>())
-            .inspect(|fut| trace!("{:?}", fut))
             .map_err(ReqwestError)
-            .inspect(|fut| trace!("{:?}", fut))
             .and_then(gelbooru_to_items)
-            .inspect(|fut| trace!("{:?}", fut))
         )
     }
 }

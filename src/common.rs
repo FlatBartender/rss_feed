@@ -1,11 +1,6 @@
-pub use futures::{
-    stream::Stream,
-    future::Future,
-};
+pub use futures::*;
 
-pub type RssResult<T> = Result<T, RssError>;
-
-pub trait FeedGenerator {
+pub trait FeedGenerator: Send {
     fn get_items(&self) -> Box<Future<Item = Vec<rss::Item>, Error = RssError>>;
 }
 

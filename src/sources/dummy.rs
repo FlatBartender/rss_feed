@@ -15,15 +15,14 @@ impl FeedGenerator for DummyFeedGenerator {
         use RssError::*;
 
         trace!("DummyFeedGenerator used");
-        let item = rss::ItemBuilder::default()
+        Box::new(rss::ItemBuilder::default()
             .title("dummy".to_string())
             .link("dummy.link".to_string())
             .description("dummy description".to_string())
             .build()
-            .map_err(StringError).unwrap();
-
-        let res: Vec<rss::Item> = std::iter::repeat(item).take(self.limit).collect();
-
-        Box::new(futures::future::result(Ok(res)))
+            .map(|item| std::iter::repeat(item).take(self.limit).collect())
+            .map_err(StringError)
+            .into_future()
+        )
     }
 }

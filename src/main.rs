@@ -13,6 +13,7 @@ extern crate hotwatch;
 #[macro_use]
 extern crate log;
 extern crate pretty_env_logger;
+extern crate parking_lot;
 
 mod sources;
 mod common;
@@ -23,12 +24,12 @@ use std::collections::HashMap;
 use hyper::*;
 use hyper::service::*;
 use rss::*;
-use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use common::*;
 use futures::future::*;
 use lazy_static::initialize;
 use hotwatch::*;
+use std::sync::RwLock;
 
 fn antique() -> Option<Instant> {
     None
@@ -56,36 +57,73 @@ lazy_static! {
     };
 }
 
-fn serve_rss(req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = hyper::http::Error>> {
-    let mut response = Response::builder();
+fn vecvec_into_vec((path, vecvec): (String, Vec<Vec<rss::Item>>)) -> (String, Vec<rss::Item>) {
+    (path, vecvec.into_iter().flat_map(|v| v.into_iter()).collect())
+}
 
-    let path = req.uri().path()[1..].to_string();
+fn actually_update_cache((path, vec): (String, Vec<rss::Item>)) -> String {
+    let profile = PROFILES.write().unwrap().get_mut(&path).unwrap();
+    profile.cache = vec;
+    path
+}
 
-    Box::new(PROFILES.write().into_future().map_err(|err| (format!("{:?}", err), 500)).and_then(|profiles| {
-        profiles.get_mut(&path).ok_or(("profile not found".to_string(), 404))
-    }).and_then(|profile| {
-        if profile.cache_ts.is_none() || profile.cache_ts.unwrap().elapsed() > profile.cache_life {
-            Either::A(
-                join_all(profile.sources.iter().map(|s| s.get_items()))
-                .map(|results: Vec<Vec<rss::Item>>| {
-                    results.into_iter().flat_map(|v| v.into_iter()).collect()
-                }).map(|results: Vec<rss::Item>| {
-                    profile.cache = results.clone();
-                    results
-                }).map_err(|err| {
+fn refresh_cache(path: String) -> impl Future<Item = String, Error = (String, u16)> {
+    let (cache_ts, cache_life) = {
+        let profile = PROFILES.read().unwrap().get(&path).unwrap();
+        (profile.cache_ts, profile.cache_life)
+    };
+
+    match cache_ts.is_none() || cache_ts.unwrap().elapsed() > cache_life {
+        false => Either::A(ok(path)),
+        true => {
+            let sources = {
+                PROFILES.read().unwrap().get(&path).unwrap().sources
+            };
+
+            Either::B(
+                ok(path.clone()).join(join_all(sources.iter().map(sources::Source::get_items)))
+                .map(vecvec_into_vec)
+                .map(actually_update_cache)
+                .map_err(|err| {
                     (format!("{:?}", err), 500)
                 })
             )
-        } else {
-            Either::B(ok(profile.cache.clone()))
-        }
-    }).and_then(|items| {
-        ChannelBuilder::default().items(items).build().map_err(|err| (err, 500))
-    }).and_then(|channel| {
-        response.status(200).body(Body::from(channel.to_string())).map_err(|err| (format!("{:?}", err), 500))
-    }).or_else(|(err, code)| {
-        response.status(code).body(Body::from(format!("{:#?}", err)))
-    }).from_err())
+        },
+    }
+}
+
+fn get_cache(path: String) -> Vec<rss::Item> {
+    PROFILES.read().unwrap().get(&path).unwrap().cache.clone()
+}
+
+fn make_channel(items: Vec<rss::Item>) -> impl Future<Item = rss::Channel, Error = (String, u16)> {
+    ChannelBuilder::default().items(items).build().map_err(|err| (err, 500)).into_future()
+}
+
+fn make_response(channel: rss::Channel) -> impl Future<Item = Response<Body>, Error = (String, u16)> {
+    Response::builder().status(200).body(Body::from(channel.to_string())).map_err(|err| (format!("{:?}", err), 500)).into_future()
+}
+
+fn response_error((err, code): (String, u16)) -> impl Future<Item = Response<Body>, Error = hyper::http::Error> {
+    Response::builder().status(code).body(Body::from(format!("{:#?}", err))).into_future()
+}
+
+fn serve_rss(req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = hyper::http::Error> + Send> {
+    let path = req.uri().path()[1..].to_string();
+
+    let profile_exists = {
+        PROFILES.read().unwrap().contains_key(&path)
+    };
+    
+    Box::new(match profile_exists {
+        true => ok(path),
+        false => err(("profile not found".to_string(), 404)),
+    }.and_then(refresh_cache)
+    .map(get_cache)
+    .and_then(make_channel)
+    .and_then(make_response)
+    .or_else(response_error)
+    .from_err())
 }
 
 fn main() {
@@ -104,12 +142,6 @@ fn main() {
                     return;
                 }
 
-                let profiles = PROFILES.write();
-                if profiles.is_err() {
-                    error!("Error while locking PROFILES for writing. Aborting rehash.");
-                    return;
-                }
-
                 let file = File::open(path);
                 if file.is_err() {
                     error!("Error while opening profiles.json for reading. Aborting rehash.");
@@ -124,7 +156,7 @@ fn main() {
                 }
                 let new_profiles = new_profiles.unwrap();
 
-                let mut profiles = profiles.unwrap();
+                let profiles = PROFILES.write().unwrap();
                 *profiles = new_profiles;
                 info!("profiles successfully reloaded");
             },
